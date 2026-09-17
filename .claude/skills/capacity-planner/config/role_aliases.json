@@ -1,0 +1,6 @@
+{
+  "_comment": "Maps a raw 'Analyst Designation' from the weekly Raydar's export to the canonical Role shown on the Capacity Planning sheet. Designations not listed pass through unchanged (title-cased).",
+  "associate data analyst": "Data Analyst",
+  "data analyst": "Data Analyst",
+  "senior analyst": "Senior Analyst"
+}
