@@ -1,6 +1,6 @@
 ---
 name: capacity-planner
-description: Refresh the Medline team Capacity Planning Google Sheet from a weekly raw Raydar's time-tracking export. Cleans and normalizes the export (name/role/activity naming drift), rebuilds the Data / Per Resource - Per Activity / Summary tabs, and appends a dated row to a History tab for trend tracking over time. Use when the user says "run capacity planner", "update the Medline capacity sheet", "refresh capacity planning", or hands over this week's Raydar's export alongside a link to the Capacity Planning Google Sheet.
+description: Refresh the Medline team Capacity Planning Google Sheet from a weekly raw Raydar's time-tracking export. Cleans and normalizes the export (name/role/activity naming drift), rebuilds the Data (sorted per-resource-per-activity) and Summary tabs, and appends a dated row to a History tab for trend tracking over time. Use when the user says "run capacity planner", "update the Medline capacity sheet", "refresh capacity planning", or hands over this week's Raydar's export alongside a link to the Capacity Planning Google Sheet.
 ---
 
 # Capacity Planner (Medline)
@@ -10,13 +10,16 @@ that gets imported back into the same live Google Sheet.
 
 ## Why this exists / how it works
 
-The Capacity Planning sheet is formula-driven: the `Summary` and
-`Per Resource - Per Activity` tabs are all `SUMIF`/`INDEX`/`MATCH`/`MAXIFS`
-formulas that read off a flat `Data` tab (Name, Role, Activity, Hours). The
-raw Raydar's export uses inconsistent naming ("Product qa" vs "Product QA",
-"Workspace Conig" typo, "call" vs "Calls", "Associate Data Analyst" folded
-into "Data Analyst", etc.) — cleaning that up by hand every week is the
-actual manual work today.
+The Capacity Planning sheet is formula-driven: the `Summary` tab is all
+`SUMIF`/`INDEX`/`MATCH`/`MAXIFS` formulas that read off a flat `Data` tab
+(Name, Role, Activity, Hours). The raw Raydar's export uses inconsistent
+naming ("Product qa" vs "Product QA", "Workspace Conig" typo, "call" vs
+"Calls", "Associate Data Analyst" folded into "Data Analyst", etc.) —
+cleaning that up by hand every week is the actual manual work today.
+
+The `Data` tab is sorted by Name then Activity in the rebuilt workbook, so
+it doubles as the per-resource-per-activity view — there is deliberately no
+separate duplicate tab for that.
 
 **Known tool limitation — read this before promising anything to the user:**
 there is no connected Google Sheets values-write API in this environment
@@ -45,15 +48,14 @@ If either is missing, ask for it before doing anything else.
    `/d/` and the next `/`).
 
 2. **Download the current live sheet** so the rebuild can preserve its
-   Name list, Activity list, "Potentially to be reduced" flags, and History
-   log:
+   Name list, Activity list, and History log:
    - Call `mcp__Google_Drive__download_file_content` with that `fileId` and
      `exportMimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"`.
    - Decode the base64 result and save it to the scratchpad, e.g.
      `current_live_sheet.xlsx`.
    - If the download fails (wrong link, no access), stop and tell the user
      — don't silently build from scratch, since that would blow away their
-     Name/Activity ordering and reducible-hours flags.
+     Name/Activity ordering.
 
 3. **Save the user's uploaded weekly Raydar's export** to the scratchpad,
    e.g. `weekly_export.xlsx`.

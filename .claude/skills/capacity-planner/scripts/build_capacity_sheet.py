@@ -4,14 +4,14 @@ Rebuilds the Medline Capacity Planning workbook for one week.
 
 Inputs:
   - the CURRENT live Google Sheet, downloaded as .xlsx (read-only source of
-    truth for the Name list, Activity list, "Potentially to be reduced"
-    flags, and History log)
+    truth for the Name list, Activity list, and History log)
   - THIS WEEK'S raw Raydar's export .xlsx
 
 Output:
-  - a brand new .xlsx with Data / Per Resource - Per Activity / Summary /
-    History / Anas Format tabs, ready to import into the same Google Sheet
-    via File > Import > Replace spreadsheet.
+  - a brand new .xlsx with Data / Summary / History tabs, ready to import
+    into the same Google Sheet via File > Import > Replace spreadsheet.
+    The Data tab itself is sorted by Name then Activity, so it also serves
+    as the per-resource-per-activity view.
 
 Also prints a JSON report to stdout (new people, new/unmapped activities,
 totals) so the calling agent can summarize the run for the user.
@@ -178,12 +178,11 @@ def week_ending_label(rows, override):
 
 def read_current_sheet(path):
     """Pull the bits of the live sheet we need to preserve: name list, activity
-    list + reduce-flags, and History log (if present)."""
+    list, and History log (if present)."""
     result = {
         "names": [],
-        "activities": [],  # list of (activity, flag)
+        "activities": [],
         "history_rows": [],  # (week_ending, name, role, activity, hours)
-        "anas_format_rows": None,
     }
     if not path:
         return result
@@ -196,9 +195,7 @@ def read_current_sheet(path):
             r += 1
         r = 3
         while ws.cell(r, 9).value:  # column I
-            activity = str(ws.cell(r, 9).value).strip()
-            flag = ws.cell(r, 12).value  # column L
-            result["activities"].append((activity, flag))
+            result["activities"].append(str(ws.cell(r, 9).value).strip())
             r += 1
     if "History" in wb.sheetnames:
         ws = wb["History"]
@@ -207,12 +204,6 @@ def read_current_sheet(path):
             if vals[0] is None:
                 continue
             result["history_rows"].append(tuple(vals))
-    if "Anas Format" in wb.sheetnames:
-        ws = wb["Anas Format"]
-        rows = []
-        for r in range(1, ws.max_row + 1):
-            rows.append([ws.cell(r, c).value for c in range(1, ws.max_column + 1)])
-        result["anas_format_rows"] = rows
     return result
 
 
@@ -221,11 +212,13 @@ def build_workbook(normalized_rows, weekly_raw_ws, weekly_header_row, current, w
     wb.remove(wb.active)
 
     # ---- Data tab (this week only, matches "Total Hours (Last Week)") ----
+    # Sorted by Name then Activity: this is also the per-resource-per-activity
+    # view, so there's no need for a separate duplicate tab.
     ws_data = wb.create_sheet("Data")
     ws_data.append(["Name", "Role", "Activity", "Hours"])
     for c in ws_data[1]:
         c.font = HEADER_FONT
-    for row in normalized_rows:
+    for row in sorted(normalized_rows, key=lambda r: (r["name"], r["activity"])):
         ws_data.append([row["name"], row["role"], row["activity"], round(row["hours"], 3)])
     ws_data.column_dimensions["A"].width = 24
     ws_data.column_dimensions["B"].width = 18
@@ -240,17 +233,6 @@ def build_workbook(normalized_rows, weekly_raw_ws, weekly_header_row, current, w
     for c in ws_raw[1]:
         c.font = HEADER_FONT
 
-    # ---- Per Resource - Per Activity tab ----
-    ws_pr = wb.create_sheet("Per Resource - Per Activity")
-    ws_pr.append([None, "Name", "Role", "Activity", "Hours per Week"])
-    for c in ws_pr[1]:
-        c.font = HEADER_FONT
-    for row in sorted(normalized_rows, key=lambda r: (r["name"], r["activity"])):
-        ws_pr.append([None, row["name"], row["role"], row["activity"], round(row["hours"], 3)])
-    ws_pr.column_dimensions["B"].width = 24
-    ws_pr.column_dimensions["C"].width = 18
-    ws_pr.column_dimensions["D"].width = 40
-
     # ---- Merge name / activity lists (preserve existing order, append new) ----
     names_seen = list(current["names"])
     for row in normalized_rows:
@@ -258,9 +240,7 @@ def build_workbook(normalized_rows, weekly_raw_ws, weekly_header_row, current, w
             names_seen.append(row["name"])
             report["new_people"].add(row["name"])
 
-    existing_activity_names = [a for a, _ in current["activities"]]
-    flag_by_activity = {a: f for a, f in current["activities"]}
-    activities_seen = list(existing_activity_names)
+    activities_seen = list(current["activities"])
     data_activities = {row["activity"] for row in normalized_rows}
     for activity in sorted(data_activities):
         if activity not in activities_seen:
@@ -278,8 +258,7 @@ def build_workbook(normalized_rows, weekly_raw_ws, weekly_header_row, current, w
     ws_sum["I2"] = "Activity"
     ws_sum["J2"] = "Total Hours (Week)"
     ws_sum["K2"] = "% of Team Time"
-    ws_sum["L2"] = "Potentially to be reduced"
-    for coord in ["B2", "C2", "D2", "E2", "F2", "G2", "I2", "J2", "K2", "L2"]:
+    for coord in ["B2", "C2", "D2", "E2", "F2", "G2", "I2", "J2", "K2"]:
         ws_sum[coord].font = HEADER_FONT
 
     last_data_row = n_data + 1
@@ -302,12 +281,6 @@ def build_workbook(normalized_rows, weekly_raw_ws, weekly_header_row, current, w
         ws_sum.cell(r, 9, activity)  # I
         ws_sum.cell(r, 10, f"=SUMIF(Data!$C:$C,I{r},Data!$D:$D)").number_format = "0.00"
         ws_sum.cell(r, 11, f"=IFERROR(J{r}/SUM(Data!$D:$D),0)").number_format = "0.0%"
-        flag = flag_by_activity.get(activity)
-        if flag:
-            ws_sum.cell(r, 12, flag)  # L
-    last_activity_row = 2 + len(activities_seen)
-    if activities_seen:
-        ws_sum.cell(3, 13, f'=SUMIF(L3:L{last_activity_row}, "Y", J3:J{last_activity_row})')
 
     ws_sum.column_dimensions["B"].width = 22
     ws_sum.column_dimensions["C"].width = 16
@@ -331,16 +304,6 @@ def build_workbook(normalized_rows, weekly_raw_ws, weekly_header_row, current, w
     ws_hist.column_dimensions["A"].width = 24
     ws_hist.column_dimensions["B"].width = 24
     ws_hist.column_dimensions["D"].width = 40
-
-    # ---- Anas Format tab (static manual-entry template, passthrough) ----
-    ws_anas = wb.create_sheet("Anas Format")
-    template = current["anas_format_rows"] or [
-        ["Name", "Rol", "Activities", "Hours per week"],
-    ]
-    for row in template:
-        ws_anas.append(row)
-    for c in ws_anas[1]:
-        c.font = HEADER_FONT
 
     return wb, {
         "team_total_hours": round(sum(r["hours"] for r in normalized_rows), 2),
