@@ -1,6 +1,6 @@
 ---
 name: capacity-planner
-description: Refresh the Medline team Capacity Planning Google Sheet from a raw Raydar's time-tracking export covering any date range - a week, a month, a quarter, or a full year. Cleans and normalizes the export (name/role/activity naming drift), rebuilds the Data (sorted per-resource-per-activity) and Summary tabs for the full span uploaded, and maintains Daily/Weekly/Monthly trend logs. Use when the user says "run capacity planner", "update the Medline capacity sheet", "refresh capacity planning", or hands over a Raydar's export alongside a link to the Capacity Planning Google Sheet.
+description: Refresh the Medline team Capacity Planning Google Sheet from a raw Raydar's time-tracking export covering any date range - a week, a month, a quarter, or a full year. Cleans and normalizes the export (name/role/activity naming drift), rebuilds the Data (sorted per-resource-per-activity) and Summary tabs for the full span uploaded, maintains Daily/Weekly/Monthly trend logs, and ranks activities by automation potential (P0-DataOps / P1-LLM) with an estimated $ savings view. Use when the user says "run capacity planner", "update the Medline capacity sheet", "refresh capacity planning", or hands over a Raydar's export alongside a link to the Capacity Planning Google Sheet.
 ---
 
 # Capacity Planner (Medline)
@@ -33,6 +33,41 @@ a single year-long upload populates all three grains correctly in one run,
 and re-running later (weekly, monthly, whenever) keeps accumulating into
 the same three logs without double-counting or losing earlier data, even
 if two uploads each cover only part of the same week or month.
+
+**Automation & cost view (P0-DataOps / P1-LLM).** The rebuilt workbook
+includes an `Automation Opportunities` tab: for every activity, the hours
+logged this run, an estimated $ cost, an automation tier — `P0-DataOps`
+(rule-based/scriptable), `P1-LLM` (needs judgment but is pattern-based, a
+good agent/LLM fit), or `Manual-only` (needs a human) — an estimated
+% of that time reducible once automated, and the resulting est. hours/$
+saved, sorted highest-$-impact first. This is explicitly a P0/P1 view only
+— see "Deliberately out of scope" below for why people-risk factors
+(ramp status, career aspirations, attrition risk, PTO) are NOT in this
+tab, by the user's own choice when this was scoped.
+
+The tier/rationale per activity lives in `config/activity_automation.json`
+and the $ math uses `config/role_hourly_rates.json` — **both are seeded
+with a reasonable starting judgment / illustrative placeholder numbers,
+not verified data.** Always pass the run's `note` field and any
+`unclassified_activities` back to the user, and be explicit that $ figures
+are directional until someone replaces the placeholder rates with real
+fully-loaded costs.
+
+## Deliberately out of scope
+
+The user considered adding people-risk signals (ramp status, career/
+promotion aspirations, visibility, attrition risk, PTO) and chose to scope
+this skill to the automation/cost view only, for now. Reasons worth
+remembering if this comes up again:
+- Visibility (client-facing hours mix) and concentration/bus-factor risk
+  (only one person covering a critical activity) ARE computable from this
+  data, if asked for later.
+- Ramp status, career aspirations, flight risk, and PTO are NOT in the
+  Raydar's export (no hire date, no HR signal, no leave calendar) and
+  should not be inferred from hours dips or trends — that kind of guess is
+  easy to get wrong and can do real damage if it's wrong. If this scope
+  expands later, those should come from a human-maintained input (e.g. a
+  manager-filled roster tab), not be computed by this script.
 
 **Known tool limitation — read this before promising anything to the user:**
 there is no connected Google Sheets values-write API in this environment
@@ -140,11 +175,20 @@ If either is missing, ask for it before doing anything else.
   (e.g. "Associate Data Analyst" is deliberately folded into "Data Analyst"
   to match the account's existing reporting convention; "Senior Analyst"
   stays distinct).
+- `config/activity_automation.json` — canonical Activity → `{tier,
+  reducible_pct, rationale}` for the Automation Opportunities tab. An
+  activity missing from this file shows as "Unclassified" rather than being
+  silently guessed at — surfaced via the run's `unclassified_activities`.
+- `config/role_hourly_rates.json` — canonical Role → hourly cost (USD) used
+  for the Automation Opportunities tab's $ figures. **Placeholder values —
+  ask the user for real fully-loaded rates and update this file when they
+  provide them.**
 
 Edit these directly (they're plain JSON) whenever the export introduces a
-new spelling of an existing name. This is expected periodic maintenance,
-not a bug — call it out to the user the first time it happens so they know
-the file exists and can ask for edits.
+new spelling of an existing name, a new activity needs an automation
+assessment, or real cost rates become available. This is expected periodic
+maintenance, not a bug — call it out to the user the first time it happens
+so they know the files exist and can ask for edits.
 
 ## Known pre-existing data quirk
 

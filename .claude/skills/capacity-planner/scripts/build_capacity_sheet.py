@@ -261,6 +261,64 @@ def reaggregate_from_daily(daily_rows, period_fn, legacy_rows):
     return sorted(legacy_kept + recomputed, key=lambda r: (r[0], r[1], r[3]))
 
 
+def build_automation_tab(wb, normalized_rows, activities_seen, activity_automation, role_rates, period_label, report):
+    """P0 (DataOps)/P1 (LLM) automation & cost view: for each activity, the
+    hours logged, an estimated $ cost (using role_hourly_rates.json - a
+    PLACEHOLDER cost model, not verified payroll data), the automation tier
+    from activity_automation.json, and the estimated hours/$ saved if that
+    tier's reducible_pct were realized. Static computed values, not live
+    formulas - the rate/tier config lives outside the spreadsheet."""
+    hours_by_activity = {}
+    cost_by_activity = {}
+    roles_by_activity = {}
+    default_rate = role_rates.get("_default", 0)
+    for row in normalized_rows:
+        rate = role_rates.get(row["role"], default_rate)
+        hours_by_activity[row["activity"]] = hours_by_activity.get(row["activity"], 0.0) + row["hours"]
+        cost_by_activity[row["activity"]] = cost_by_activity.get(row["activity"], 0.0) + row["hours"] * rate
+        roles_by_activity.setdefault(row["activity"], set()).add(row["role"])
+
+    rows_out = []
+    totals = {"P0-DataOps": 0.0, "P1-LLM": 0.0, "Manual-only": 0.0, "Unclassified": 0.0}
+    for activity in activities_seen:
+        hours = round(hours_by_activity.get(activity, 0.0), 2)
+        cost = round(cost_by_activity.get(activity, 0.0), 2)
+        info = activity_automation.get(activity)
+        if info is None:
+            tier, pct, rationale = "Unclassified", 0, "Not yet assessed - add an entry to config/activity_automation.json."
+            if activity in hours_by_activity:
+                report["unclassified_activities"].add(activity)
+        else:
+            tier, pct = info.get("tier", "Unclassified"), info.get("reducible_pct", 0)
+            rationale = info.get("rationale", "")
+        est_hours_saved = round(hours * pct / 100.0, 2)
+        est_dollars_saved = round(cost * pct / 100.0, 2)
+        totals[tier] = totals.get(tier, 0.0) + est_dollars_saved
+        roles = ", ".join(sorted(roles_by_activity.get(activity, [])))
+        rows_out.append((activity, hours, roles, cost, tier, pct, est_hours_saved, est_dollars_saved, rationale))
+
+    rows_out.sort(key=lambda r: r[7], reverse=True)  # highest $ saved first
+
+    ws = wb.create_sheet("Automation Opportunities")
+    ws.append([
+        f"Activity", f"Total Hours ({period_label})", "Role(s)", "Est. Cost ($, placeholder rates)",
+        "Tier", "Est. % Reducible", "Est. Hours Saved", "Est. $ Saved", "Rationale",
+    ])
+    for c in ws[1]:
+        c.font = HEADER_FONT
+    for row in rows_out:
+        ws.append(list(row))
+    ws.column_dimensions["A"].width = 45
+    ws.column_dimensions["C"].width = 18
+    ws.column_dimensions["I"].width = 55
+
+    return {
+        "est_dollars_saved_p0_dataops": round(totals.get("P0-DataOps", 0.0), 2),
+        "est_dollars_saved_p1_llm": round(totals.get("P1-LLM", 0.0), 2),
+        "est_dollars_saved_total": round(sum(totals.values()), 2),
+    }
+
+
 def read_current_sheet(path):
     """Pull the bits of the live sheet we need to preserve: name list,
     activity list, and the Daily/Weekly/Monthly logs (if present)."""
@@ -302,7 +360,8 @@ def read_current_sheet(path):
     return result
 
 
-def build_workbook(normalized_rows, weekly_raw_ws, weekly_header_row, current, period_label, report):
+def build_workbook(normalized_rows, weekly_raw_ws, weekly_header_row, current, period_label, report,
+                    activity_automation, role_rates):
     wb = Workbook()
     wb.remove(wb.active)
 
@@ -381,6 +440,12 @@ def build_workbook(normalized_rows, weekly_raw_ws, weekly_header_row, current, p
     ws_sum.column_dimensions["E"].width = 30
     ws_sum.column_dimensions["I"].width = 45
 
+    # ---- Automation Opportunities tab (P0-DataOps / P1-LLM / Manual-only
+    # cost view) ----
+    automation_totals = build_automation_tab(
+        wb, normalized_rows, activities_seen, activity_automation, role_rates, period_label, report
+    )
+
     # ---- Daily / Weekly / Monthly logs: each row bucketed by its OWN date,
     # so one upload spanning a year fills in the right buckets across all
     # three grains in one run.
@@ -421,6 +486,7 @@ def build_workbook(normalized_rows, weekly_raw_ws, weekly_header_row, current, p
         "daily_log_rows": n_daily,
         "weekly_log_rows": n_weekly,
         "monthly_log_rows": n_monthly,
+        **automation_totals,
     }
 
 
@@ -441,18 +507,28 @@ def main():
     activity_aliases = {k: v for k, v in activity_aliases.items() if not k.startswith("_")}
     role_aliases = load_json(CONFIG_DIR / "role_aliases.json")
     role_aliases = {k: v for k, v in role_aliases.items() if not k.startswith("_")}
+    activity_automation = load_json(CONFIG_DIR / "activity_automation.json")
+    activity_automation = {k: v for k, v in activity_automation.items() if not k.startswith("_")}
+    role_rates = load_json(CONFIG_DIR / "role_hourly_rates.json")
+    role_rates = {k: v for k, v in role_rates.items() if not k.startswith("_")}
 
     raw_rows, weekly_ws, header_row = read_weekly_export(args.weekly)
     if not raw_rows:
         print(json.dumps({"error": "No usable rows found in the export."}))
         sys.exit(1)
 
-    report = {"unmapped_activities": set(), "new_people": set(), "new_activities": set()}
+    report = {
+        "unmapped_activities": set(), "new_people": set(), "new_activities": set(),
+        "unclassified_activities": set(),
+    }
     normalized_rows = normalize_rows(raw_rows, activity_aliases, role_aliases, report)
     period_label = date_range_label(normalized_rows, args.period_label)
 
     current = read_current_sheet(args.current)
-    wb, stats = build_workbook(normalized_rows, weekly_ws, header_row, current, period_label, report)
+    wb, stats = build_workbook(
+        normalized_rows, weekly_ws, header_row, current, period_label, report,
+        activity_automation, role_rates,
+    )
 
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     wb.save(args.output)
@@ -464,6 +540,9 @@ def main():
         "new_people": sorted(report["new_people"]),
         "new_activities": sorted(report["new_activities"]),
         "unmapped_activities": sorted(report["unmapped_activities"]),
+        "unclassified_activities": sorted(report["unclassified_activities"]),
+        "note": "Est. $ figures use PLACEHOLDER hourly rates in config/role_hourly_rates.json - "
+                "replace with real fully-loaded costs before treating them as real numbers.",
     }
     print(json.dumps(out_report, indent=2))
 

@@ -1,0 +1,6 @@
+{
+  "_comment": "PLACEHOLDER fully-loaded hourly costs (USD) per canonical Role, used only to estimate $ impact on the Automation Opportunities tab. These are illustrative round numbers, NOT real payroll/cost data. Replace with actual fully-loaded hourly costs before treating any $ figure in the output as real. '_default' is used for any Role not listed here.",
+  "Data Analyst": 20,
+  "Senior Analyst": 30,
+  "_default": 20
+}
